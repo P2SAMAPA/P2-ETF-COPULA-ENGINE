@@ -77,6 +77,20 @@ def get_module_data(module: str, start_date: str | None = None) -> dict:
         bm_name = BENCHMARK_EQUITY
 
     all_tickers = etfs + [bm_name]
+
+    # Safety: only keep tickers that actually exist in the dataset
+    available   = [t for t in all_tickers if t in raw.columns]
+    missing     = [t for t in all_tickers if t not in raw.columns]
+    if missing:
+        print(f"  [loader] WARNING: tickers not found in dataset, dropping: {missing}")
+
+    # Update etfs list to only those that are available (exclude benchmark from etf list)
+    etfs    = [t for t in etfs    if t in available]
+    bm_name = bm_name if bm_name in available else None
+    if bm_name is None:
+        raise ValueError(f"Benchmark {bm_name} not found in dataset columns.")
+
+    all_tickers = etfs + [bm_name]
     prices      = raw[all_tickers].ffill().dropna()
 
     rets = log_returns(prices[etfs])
