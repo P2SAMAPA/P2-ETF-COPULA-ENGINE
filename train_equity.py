@@ -1,11 +1,13 @@
 """
 P2-ETF-COPULA-ENGINE  ·  train_equity.py
 Full training pipeline for the Equity Sectors module.
-Identical flow to train_fi.py but operates on EQUITY_ETFS / SPY benchmark.
+Identical flow to train_fi.py — downloads existing signal JSON from HF
+before writing so the FI key is never overwritten.
 """
 
 import os, json, datetime
 import pandas as pd
+from huggingface_hub import hf_hub_download
 
 from config import (
     HF_DATASET_OUT, OUTPUT_JSON,
@@ -34,16 +36,15 @@ def run_equity():
     rets   = data["returns"]
     macro  = data["macro"]
     bm_r   = data["benchmark"]
-    etfs   = data["etfs"]
 
     train_r, train_m = data["splits"]["train"]
     val_r,   val_m   = data["splits"]["val"]
     test_r,  test_m  = data["splits"]["test"]
 
     print(f"      Total days : {len(rets)}")
-    print(f"      Train      : {len(train_r)}  ({train_r.index[0].date()} → {train_r.index[-1].date()})")
-    print(f"      Val        : {len(val_r)}   ({val_r.index[0].date()} → {val_r.index[-1].date()})")
-    print(f"      Test       : {len(test_r)}   ({test_r.index[0].date()} → {test_r.index[-1].date()})")
+    print(f"      Train      : {len(train_r)}  ({train_r.index[0].date()} -> {train_r.index[-1].date()})")
+    print(f"      Val        : {len(val_r)}   ({val_r.index[0].date()} -> {val_r.index[-1].date()})")
+    print(f"      Test       : {len(test_r)}   ({test_r.index[0].date()} -> {test_r.index[-1].date()})")
 
     # ── 2. GARCH marginals ────────────────────────────────────────
     print("\n[2/7] Fitting GARCH marginals (train set)...")
@@ -61,7 +62,6 @@ def run_equity():
     fitted_m_win = fit_all_marginals(train_window)
     u_df         = build_uniform_matrix(fitted_m_win, train_window)
     cop_fit      = fit_copula(u_df)
-    td_mat       = tail_dependence(u_df)
 
     print(f"      Best copula family : {cop_fit['best_family']}")
     print(f"      AIC scores         : {cop_fit['aic_scores']}")
@@ -85,7 +85,7 @@ def run_equity():
     regime_id     = predict_regime(regime_model, latest_macro)
     regime_name   = regime_model["regime_names"].get(regime_id, str(regime_id))
 
-    prev_pick = _load_prev_pick(SIGNAL_HISTORY_EQ)
+    prev_pick = _load_prev_pick_from_hf(SIGNAL_HISTORY_EQ)
     scores    = score_etfs(live_sim, live_td, prev_pick)
     ntd       = next_trading_day(rets.index[-1].date())
     signal    = build_signal(
@@ -93,17 +93,18 @@ def run_equity():
         live_cop["best_family"], best_lb, ntd, latest_macro
     )
 
-    print(f"      Pick              : {signal['pick']}  ({signal['conviction_pct']:.1f}%)")
-    print(f"      Next trading day  : {ntd}")
-    print(f"      Regime            : {regime_name}")
-    print(f"      Copula family     : {signal['copula_family']}")
-    print(f"      Lookback          : {signal['lookback_days']} days")
+    print(f"      Pick             : {signal['pick']}  ({signal['conviction_pct']:.1f}%)")
+    print(f"      Next trading day : {ntd}")
+    print(f"      Regime           : {regime_name}")
+    print(f"      Copula family    : {signal['copula_family']}")
+    print(f"      Lookback         : {signal['lookback_days']} days")
 
     # ── 7. Save and upload ────────────────────────────────────────
     print("\n[7/7] Saving results and uploading to Hugging Face...")
-    os.makedirs("outputs", exist_ok=True)
 
-    existing = _load_json(OUTPUT_JSON)
+    # CRITICAL: download the existing JSON from HF first so we preserve
+    # any FI key that the prior job wrote.
+    existing = _fetch_signal_json_from_hf()
     existing["EQ"]           = signal
     existing["generated_at"] = datetime.datetime.utcnow().isoformat()
     _save_json(existing, OUTPUT_JSON)
@@ -111,32 +112,56 @@ def run_equity():
     _save_json(bt["metrics"], METRICS_EQ)
 
     if not bt["signal_log"].empty:
-        hist = bt["signal_log"].reset_index()
+        hist           = bt["signal_log"].reset_index()
         hist["module"] = "EQ"
         _append_csv(hist, SIGNAL_HISTORY_EQ)
 
     upload_results([OUTPUT_JSON, METRICS_EQ, SIGNAL_HISTORY_EQ])
     print("\nDone — Equity module complete.")
+    print(f"Signal JSON keys written: {list(existing.keys())}")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _load_prev_pick(csv_path: str) -> str | None:
+def _fetch_signal_json_from_hf() -> dict:
+    """
+    Download the current copula_signal.json from HF so we can merge into it
+    rather than overwriting the other module's key.
+    Returns empty dict if file doesn't exist yet (first run).
+    """
+    token = os.environ.get("HF_TOKEN")
     try:
-        df = pd.read_csv(csv_path)
+        path = hf_hub_download(
+            repo_id=HF_DATASET_OUT,
+            filename="results/copula_signal.json",
+            repo_type="dataset",
+            token=token,
+            force_download=True,
+        )
+        with open(path) as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"  [info] No existing signal JSON on HF (first run or error: {e}). Starting fresh.")
+        return {}
+
+
+def _load_prev_pick_from_hf(csv_filename: str) -> str | None:
+    """Download signal history CSV from HF to get yesterday's pick."""
+    token = os.environ.get("HF_TOKEN")
+    try:
+        path = hf_hub_download(
+            repo_id=HF_DATASET_OUT,
+            filename=f"results/{csv_filename}",
+            repo_type="dataset",
+            token=token,
+            force_download=True,
+        )
+        df = pd.read_csv(path)
         if "pick" in df.columns and len(df) > 0:
             return str(df["pick"].iloc[-1])
     except Exception:
         pass
     return None
-
-
-def _load_json(path: str) -> dict:
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except Exception:
-        return {}
 
 
 def _save_json(obj: dict, path: str):
