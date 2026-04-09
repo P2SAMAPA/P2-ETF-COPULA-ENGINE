@@ -8,7 +8,7 @@ HF_DATASET_IN  = "P2SAMAPA/fi-etf-macro-signal-master-data"
 HF_DATASET_OUT = "P2SAMAPA/p2-etf-copula-results"
 
 # ── ETF universes ─────────────────────────────────────────────────────────────
-FI_ETFS     = ["TLT", "LQD", "HYG", "VNQ", "GLD", "SLV", "MBB"]
+FI_ETFS     = ["TLT", "LQD", "HYG", "VNQ", "GLD", "SLV", "VCIT"]
 EQUITY_ETFS = ["QQQ", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY",
                "XLP", "XLU", "GDX", "XME", "IWM"]
 
