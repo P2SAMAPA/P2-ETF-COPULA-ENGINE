@@ -1,0 +1,81 @@
+name: Daily Conformal Signals
+
+# Runs after the copula training (22:45 UTC).
+# On first run: auto-calibrates using val-set MC simulations.
+# Subsequent runs: wraps today's signal with pre-computed q̂.
+#
+# Runtime: ~5–10 min (re-runs MC on val set for calibration on first run,
+# then ~2 min per module for live MC on subsequent days).
+
+on:
+  schedule:
+    - cron: "30 23 * * 1-5"    # 23:30 UTC Mon–Fri (45 min after training)
+  workflow_dispatch:
+    inputs:
+      module:
+        description: "Module to run (FI / EQ / both)"
+        required: false
+        default: "both"
+      force_recalibrate:
+        description: "Set true to delete cached params and recalibrate from scratch"
+        required: false
+        default: "false"
+
+jobs:
+  conformal-predict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Force recalibrate (optional)
+        if: ${{ github.event.inputs.force_recalibrate == 'true' }}
+        run: |
+          rm -f models/conformal_fi.json models/conformal_eq.json
+          echo "Deleted cached conformal params — will recalibrate from scratch."
+
+      - name: Run conformal predict (auto-calibrates if needed)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          MODULE="${{ github.event.inputs.module || 'both' }}"
+          echo "Running conformal for module: $MODULE"
+          python -m conformal.predict_conformal --module "$MODULE"
+
+      - name: Print summary
+        run: |
+          python - <<'EOF'
+          import json, os, sys
+          path = "results/copula_signal_conformal.json"
+          if not os.path.exists(path):
+              print("ERROR: copula_signal_conformal.json not found")
+              sys.exit(1)
+          with open(path) as f:
+              d = json.load(f)
+          ok = False
+          for key in ["FI", "EQ"]:
+              sig = d.get(key)
+              if sig and sig.get("pick"):
+                  iv = sig.get("top_interval_90", {})
+                  print(f"  {key}: {sig['pick']}  "
+                        f"E[R]={sig.get('conformal_per_etf',{}).get(sig['pick'],{}).get('expected_return','?')}  "
+                        f"90% CI=[{iv.get('lo','?')}, {iv.get('hi','?')}]  "
+                        f"class='{sig.get('signal_class','?')}'  "
+                        f"ntd={sig['next_trading_day']}")
+                  ok = True
+              else:
+                  print(f"  {key}: no signal")
+          if not ok:
+              sys.exit(1)
+          EOF
