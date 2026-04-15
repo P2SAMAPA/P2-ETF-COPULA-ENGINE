@@ -82,6 +82,15 @@ def _fmt_dt(s):
         return s or "—"
 
 
+def _hex_to_rgba(hex_color, alpha=0.5):
+    """Convert #RRGGBB to rgba(R,G,B,alpha)."""
+    hex_color = hex_color.lstrip('#')
+    if len(hex_color) == 6:
+        r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        return f"rgba({r},{g},{b},{alpha})"
+    return hex_color  # fallback
+
+
 # ── Data loading ──────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=300, show_spinner="Loading signals...")
@@ -523,6 +532,11 @@ def render_mc_distribution_chart(conf_sig: dict, module: str, alpha: str):
     valid   = sorted(valid, key=lambda t: cpe[t]["expected_return"], reverse=True)
     top     = conf_sig.get("pick", "")
 
+    # ---- FIX: use rgba() instead of hex+alpha for compatibility ----
+    colors = ["#1a6ef5" if t == top else "#6b7280" for t in valid]
+    # Convert hex to rgba with alpha 0.35 for the conformal CI bar
+    rgba_colors = [_hex_to_rgba(c, alpha=0.35) for c in colors]
+
     fig = make_subplots(
         rows=1, cols=2,
         subplot_titles=[
@@ -532,23 +546,21 @@ def render_mc_distribution_chart(conf_sig: dict, module: str, alpha: str):
         horizontal_spacing=0.14,
     )
 
-    colors = ["#1a6ef5" if t == top else "#6b7280" for t in valid]
-
     for i, t in enumerate(valid):
         d   = cpe[t]
         ivs = d["intervals"][alpha]
-        # MC box: p10–p90 as the "box", median as marker
+        # MC box: p10–p90 as a grey line
         fig.add_trace(go.Scatter(
             x=[d["mc_p10"], d["mc_p90"]], y=[t, t],
             mode="lines",
             line=dict(color="#e5e7eb", width=5),
             showlegend=False, hoverinfo="skip",
         ), row=1, col=1)
-        # Conformal CI overlay
+        # Conformal CI overlay (now using rgba string)
         fig.add_trace(go.Scatter(
             x=[ivs["lo"], ivs["hi"]], y=[t, t],
             mode="lines",
-            line=dict(color=colors[i] + "88", width=9),
+            line=dict(color=rgba_colors[i], width=9),
             showlegend=False, hoverinfo="skip",
         ), row=1, col=1)
         # Median dot
@@ -841,16 +853,12 @@ the normalised nonconformity score `|y−μ|/σ` ≈ 0 and the conformal interva
 
 **COPULA advantage:** The copula already generates **5,000 Monte Carlo return samples**
 per ETF per day. These samples are directly in return space. The nonconformity score is:
-
-```
 s_i = max(F̂(y_i), 1 − F̂(y_i))
-```
 where `F̂(y_i)` is the empirical rank of the actual return `y_i` in the 5k MC samples.
 
 At coverage level 1−α, the conformal quantile `q̂ ∈ [0.5, 1.0]` gives:
-```
-interval = [MC_quantile(1−q̂),  MC_quantile(q̂)]
-```
+interval = [MC_quantile(1−q̂), MC_quantile(q̂)]
+
 
 **What makes this meaningful:**
 - Interval width varies per ETF and per regime (unlike NCDE absolute mode)
