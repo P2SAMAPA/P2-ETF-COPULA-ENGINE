@@ -9,7 +9,7 @@ HF_DATASET_OUT = "P2SAMAPA/p2-etf-copula-results"
 
 # ── ETF universes ─────────────────────────────────────────────────────────────
 FI_ETFS     = ["TLT", "LQD", "HYG", "VNQ", "GLD", "SLV", "VCIT"]
-EQUITY_ETFS = ["QQQ", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY",
+EQUITY_ETFS = ["QQQ", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "IWF", "XSD", "XBI" 
                "XLP", "XLU", "GDX", "XME", "IWM"]
 
 BENCHMARK_FI     = "AGG"
